@@ -12,11 +12,48 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-SPEEDFLOW_VERSION="1.0.0"
 GITLAB_URL="https://gitlab.speednet.pl"
 SPEEDFLOW_REPO="speedflow/core"
 SPEEDFLOW_DIR=".claude"
 TEMP_DIR="/tmp/speedflow-install-$$"
+
+# Get version from Git tags dynamically
+get_current_version() {
+    # If version is forced via command line, use that
+    if [ -n "$FORCE_VERSION" ]; then
+        echo "$FORCE_VERSION" | sed 's/^v//'
+        return
+    fi
+
+    # Try to get version from current repo if we're in one
+    local version=""
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        version=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+    fi
+
+    # If no local version, try remote
+    if [ -z "$version" ]; then
+        version=$(git ls-remote --tags "git@${GITLAB_URL#https://}:${SPEEDFLOW_REPO}.git" 2>/dev/null |
+                  grep -o 'v[0-9]*\.[0-9]*\.[0-9]*$' |
+                  sort -V |
+                  tail -1 |
+                  sed 's/^v//')
+    fi
+
+    # Fallback to dev version
+    if [ -z "$version" ]; then
+        if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            version="dev-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+        else
+            version="dev"
+        fi
+    fi
+
+    echo "$version"
+}
+
+# Set version dynamically
+SPEEDFLOW_VERSION=$(get_current_version)
 
 
 # Progress bar using tput
@@ -137,24 +174,29 @@ precheck_claude() {
     fi
 }
 
+# Get latest version from remote
+get_latest_version() {
+    git ls-remote --tags "git@${GITLAB_URL#https://}:${SPEEDFLOW_REPO}.git" 2>/dev/null |
+    grep -o 'v[0-9]*\.[0-9]*\.[0-9]*$' |
+    sort -V |
+    tail -1 |
+    sed 's/^v//'
+}
+
 # Check for updates
 check_for_updates() {
     log_info "Checking for Speedflow updates..."
 
     # Get latest version from GitLab tags
-    LATEST_VERSION=$(git ls-remote --tags "git@gitlab.speednet.pl:${SPEEDFLOW_REPO}.git" 2>/dev/null |
-                     grep -o 'v[0-9]*\.[0-9]*\.[0-9]*$' |
-                     sort -V |
-                     tail -1 |
-                     sed 's/^v//')
+    LATEST_VERSION=$(get_latest_version)
 
     if [ -z "$LATEST_VERSION" ]; then
         log_warning "Could not check for updates (no network or no tags)"
         return 0
     fi
 
-    # Compare versions
-    if [ "$SPEEDFLOW_VERSION" != "$LATEST_VERSION" ]; then
+    # Compare versions (skip dev versions)
+    if [[ "$SPEEDFLOW_VERSION" != "dev"* ]] && [ "$SPEEDFLOW_VERSION" != "$LATEST_VERSION" ]; then
         log_warning "Update available: v$LATEST_VERSION (current: v$SPEEDFLOW_VERSION)"
         echo
         read -p "Update now? [Y/n]: " -r
@@ -188,6 +230,40 @@ parse_args() {
                 # Silent update mode
                 SILENT_UPDATE=true
                 shift
+                ;;
+            --version=*)
+                # Force specific version installation
+                FORCE_VERSION="${1#*=}"
+                shift
+                ;;
+            --version)
+                # Force specific version installation (separate argument)
+                FORCE_VERSION="$2"
+                shift 2
+                ;;
+            --help|-h)
+                echo "Speedflow Installer"
+                echo
+                echo "Usage: bash <(curl -fsSL .../install.sh) [OPTIONS]"
+                echo
+                echo "Command line options:"
+                echo "  --check-update         Check for available updates"
+                echo "  --auto-update          Enable auto-update (default: ask user)"
+                echo "  --no-auto-update       Disable auto-update"
+                echo "  --version X.X.X        Force install specific version"
+                echo "  --update, --silent     Silent update mode"
+                echo "  --help, -h             Show this help"
+                echo
+                echo "Examples:"
+                echo "  bash <(curl -fsSL .../install.sh)                   # Normal installation"
+                echo "  bash <(curl -fsSL .../install.sh) --version 1.0.1  # Install specific version"
+                echo "  bash <(curl -fsSL .../install.sh) --check-update   # Check for updates only"
+                echo
+                echo "Support:"
+                echo "  • Slack: @sjakubowski"
+                echo "  • Email: sjakubowski@speednet.pl"
+                echo
+                exit 0
                 ;;
             *)
                 shift
@@ -350,10 +426,19 @@ install_speedflow() {
     
     # Clone repository using SSH (quietly)
     log_info "Downloading Speedflow from GitLab..."
-    if ! git clone "git@gitlab.speednet.pl:${SPEEDFLOW_REPO}.git" core > /dev/null 2>&1; then
-        log_error "Failed to clone repository"
-        log_error "Check your SSH key configuration and repository access"
-        exit 1
+    if [ -n "$FORCE_VERSION" ]; then
+        log_info "Installing forced version: v$FORCE_VERSION"
+        if ! git clone --depth 1 --branch "v$FORCE_VERSION" "git@gitlab.speednet.pl:${SPEEDFLOW_REPO}.git" core > /dev/null 2>&1; then
+            log_error "Failed to clone repository at version v$FORCE_VERSION"
+            log_error "Check if version exists and your SSH key configuration"
+            exit 1
+        fi
+    else
+        if ! git clone "git@gitlab.speednet.pl:${SPEEDFLOW_REPO}.git" core > /dev/null 2>&1; then
+            log_error "Failed to clone repository"
+            log_error "Check your SSH key configuration and repository access"
+            exit 1
+        fi
     fi
     
     # Return to original directory
@@ -432,8 +517,9 @@ show_welcome() {
     echo "██╔════╝██╔══██╗██╔════╝██╔════╝██╔══██╗██╔════╝██║     ██╔═══██╗██║    ██║"
     echo "███████╗██████╔╝█████╗  █████╗  ██║  ██║█████╗  ██║     ██║   ██║██║ █╗ ██║"
     echo "╚════██║██╔═══╝ ██╔══╝  ██╔══╝  ██║  ██║██╔══╝  ██║     ██║   ██║██║███╗██║"
-    echo "███████║██║     ███████╗███████╗██████╔╝██║     ███████╗╚██████╔╝╚███╔███╔╝ ${YELLOW}v${SPEEDFLOW_VERSION}${BLUE}"
+    echo "███████║██║     ███████╗███████╗██████╔╝██║     ███████╗╚██████╔╝╚███╔███╔╝"
     echo "╚══════╝╚═╝     ╚══════╝╚══════╝╚═════╝ ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝ "
+    echo -e "${YELLOW}v${SPEEDFLOW_VERSION}${NC}"
     echo -e "${NC}"
     echo
 
