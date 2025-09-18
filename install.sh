@@ -1,6 +1,6 @@
 #!/bin/bash
 # Speedflow Local Installer
-# Usage: curl -fsSL https://github.com/limes/speedflow/raw/main/install.sh | bash
+# Usage: bash <(curl -fsSL https://github.com/limes/speedflow/raw/main/install.sh)
 
 set -e
 
@@ -88,6 +88,53 @@ log_error() {
 # Check if command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+# Precheck functions for welcome screen
+precheck_node() {
+    if command_exists "node"; then
+        local version=$(node --version 2>/dev/null | sed 's/v//')
+        local major=$(echo "$version" | cut -d. -f1)
+        if [ "$major" -ge 18 ]; then
+            echo "✅"
+        else
+            echo "⚠️"
+        fi
+    else
+        echo "❌"
+    fi
+}
+
+precheck_git() {
+    if command_exists "git"; then
+        echo "✅"
+    else
+        echo "❌"
+    fi
+}
+
+precheck_gitlab_access() {
+    if ssh -T git@gitlab.speednet.pl -o ConnectTimeout=5 -o StrictHostKeyChecking=no 2>&1 | grep -q "Welcome" 2>/dev/null; then
+        echo "✅"
+    else
+        echo "❌"
+    fi
+}
+
+precheck_os() {
+    if [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "darwin"* ]] || [[ -n "$WSL_DISTRO_NAME" ]]; then
+        echo "✅"
+    else
+        echo "❌"
+    fi
+}
+
+precheck_claude() {
+    if command_exists "claude"; then
+        echo "✅"
+    else
+        echo "⚠️"
+    fi
 }
 
 # Check for updates
