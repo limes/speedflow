@@ -436,7 +436,7 @@ show_welcome() {
     echo "╚══════╝╚═╝     ╚══════╝╚══════╝╚═════╝ ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝ "
     echo -e "${NC}"
     echo
-    echo -e "${YELLOW}                    AI Development Platform Installer v1.0${NC}"
+    echo -e "${YELLOW}                              Version ${SPEEDFLOW_VERSION}${NC}"
     echo
 
     # Show system requirements with live checking
