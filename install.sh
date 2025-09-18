@@ -379,8 +379,28 @@ check_requirements() {
 
 # Ensure .claude is in committed .gitignore
 ensure_gitignore_safety() {
-    log_info "Checking .gitignore safety..."
-    
+    log_info "Checking Git safety requirements..."
+
+    # Check if we're in a Git repository
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo
+        log_error "❌ SECURITY REQUIREMENT: Must be in Git repository"
+        echo
+        echo "🔒 Speedflow requires Git version control for security:"
+        echo "   • Prevents accidental commit of .claude/ files"
+        echo "   • Ensures .gitignore protection is committed"
+        echo "   • Maintains clean client repositories"
+        echo
+        echo "📋 Initialize Git repository first:"
+        echo "   git init"
+        echo "   git add ."
+        echo "   git commit -m 'Initial commit'"
+        echo
+        echo "   Then re-run Speedflow installer"
+        echo
+        exit 1
+    fi
+
     # Add .claude to .gitignore if not present
     if [ ! -f ".gitignore" ] || ! grep -q "^\.claude/" .gitignore; then
         echo ".claude/" >> .gitignore
@@ -388,32 +408,26 @@ ensure_gitignore_safety() {
     else
         log_success ".claude/ already in .gitignore"
     fi
-    
+
     # ALWAYS verify .gitignore is committed (regardless if added now or existed before)
     gitignore_status=$(git status --porcelain .gitignore 2>/dev/null)
     if [ -n "$gitignore_status" ]; then
         echo
-        log_warning "SECURITY: .gitignore must be committed before continuing"
-        echo "   This prevents accidentally committing Speedflow files to client repo."
+        log_error "❌ SECURITY REQUIREMENT: .gitignore must be committed"
+        echo
+        echo "🔒 This prevents accidentally committing Speedflow files to client repo."
         echo
         echo "   Git status shows: $gitignore_status"
-        echo "   Run these commands NOW:"
+        echo "   📋 Commit .gitignore NOW:"
         echo "   git add .gitignore"
         echo "   git commit -m 'Add .claude to gitignore'"
         echo
-        read -p "Press Enter AFTER committing .gitignore..." -r
-        
-        # Check again after user claims to have committed
-        gitignore_status=$(git status --porcelain .gitignore 2>/dev/null)
-        if [ -n "$gitignore_status" ]; then
-            log_error ".gitignore changes still not committed!"
-            echo "Git status shows: $gitignore_status"
-            echo "Please commit .gitignore first, then re-run installer"
-            exit 1
-        fi
+        echo "   Then re-run Speedflow installer"
+        echo
+        exit 1
     fi
-    
-    log_success ".gitignore is committed - safe to proceed"
+
+    log_success "Git safety requirements met - safe to proceed"
 }
 
 # Install Speedflow locally
