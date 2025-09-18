@@ -430,7 +430,7 @@ verify_installation() {
 }
 
 
-# Show welcome screen
+# Show welcome screen with live prechecks
 show_welcome() {
     clear
     echo -e "${BLUE}"
@@ -451,7 +451,71 @@ show_welcome() {
     echo
     echo -e "${YELLOW}Speedflow integrates with Claude Code CLI for enhanced development${NC}"
     echo
-    read -p "Press Enter to continue..." -r
+
+    # Show system requirements with live checking
+    echo -e "${BLUE}📋 System Requirements Check:${NC}"
+    echo
+
+    # Create temp file for precheck results
+    local check_file="/tmp/speedflow-precheck-$$"
+
+    # Start background checks
+    {
+        echo "os:$(precheck_os)"
+        echo "git:$(precheck_git)"
+        echo "node:$(precheck_node)"
+        echo "claude:$(precheck_claude)"
+        echo "gitlab:$(precheck_gitlab_access)"
+    } > "$check_file" 2>/dev/null &
+    local check_pid=$!
+
+    # Display checks with live updates
+    local checks_done=false
+    while [ "$checks_done" = false ]; do
+        if [ -f "$check_file" ]; then
+            # Save cursor position and display results
+            local os_status="⏳"
+            local git_status="⏳"
+            local node_status="⏳"
+            local claude_status="⏳"
+            local gitlab_status="⏳"
+
+            if [ -s "$check_file" ]; then
+                os_status=$(grep "^os:" "$check_file" 2>/dev/null | cut -d: -f2 || echo "⏳")
+                git_status=$(grep "^git:" "$check_file" 2>/dev/null | cut -d: -f2 || echo "⏳")
+                node_status=$(grep "^node:" "$check_file" 2>/dev/null | cut -d: -f2 || echo "⏳")
+                claude_status=$(grep "^claude:" "$check_file" 2>/dev/null | cut -d: -f2 || echo "⏳")
+                gitlab_status=$(grep "^gitlab:" "$check_file" 2>/dev/null | cut -d: -f2 || echo "⏳")
+            fi
+
+            tput sc  # Save cursor
+            echo "   $os_status Operating System (Linux/macOS/WSL)"
+            echo "   $git_status Git installed"
+            echo "   $node_status Node.js 18+"
+            echo "   $claude_status Claude Code CLI (will install if missing)"
+            echo "   $gitlab_status Speednet GitLab SSH Access"
+            echo
+            echo -e "${YELLOW}Legend: ✅=Ready ⚠️=Warning ❌=Missing ⏳=Checking...${NC}"
+            echo
+
+            # Check if background process is done
+            if ! kill -0 $check_pid 2>/dev/null; then
+                checks_done=true
+            else
+                sleep 0.5
+                tput rc  # Restore cursor
+                tput ed  # Clear below cursor
+            fi
+        else
+            sleep 0.1
+        fi
+    done
+
+    # Clean up
+    rm -f "$check_file" 2>/dev/null
+
+    echo
+    read -p "Press Enter to continue with installation..." -r
     clear
 }
 
