@@ -344,12 +344,6 @@ ensure_gitignore_safety() {
 install_speedflow() {
     log_info "Installing Speedflow in current directory: $(pwd)"
     
-    # Remove existing .claude if present
-    if [ -d "$SPEEDFLOW_DIR" ]; then
-        log_warning "Existing .claude directory found, backing up..."
-        mv "$SPEEDFLOW_DIR" "${SPEEDFLOW_DIR}.backup.$(date +%s)"
-    fi
-    
     # Create temp directory
     mkdir -p "$TEMP_DIR"
     cd "$TEMP_DIR"
@@ -444,13 +438,6 @@ show_welcome() {
     echo
     echo -e "${YELLOW}                    AI Development Platform Installer v1.0${NC}"
     echo
-    echo -e "${GREEN}/install${NC}    install speedflow        ${BLUE}curl | bash${NC}"
-    echo -e "${GREEN}/agents${NC}     ai code reviewers        ${BLUE}auto-loaded${NC}"
-    echo -e "${GREEN}/context${NC}    company standards        ${BLUE}global rules${NC}"
-    echo -e "${GREEN}/commands${NC}   claude code integration   ${BLUE}slash commands${NC}"
-    echo
-    echo -e "${YELLOW}Speedflow integrates with Claude Code CLI for enhanced development${NC}"
-    echo
 
     # Show system requirements with live checking
     echo -e "${BLUE}📋 System Requirements Check:${NC}"
@@ -494,8 +481,6 @@ show_welcome() {
             echo "   $node_status Node.js 18+"
             echo "   $claude_status Claude Code CLI (will install if missing)"
             echo "   $gitlab_status Speednet GitLab SSH Access"
-            echo
-            echo -e "${YELLOW}Legend: ✅=Ready ⚠️=Warning ❌=Missing ⏳=Checking...${NC}"
             echo
 
             # Check if background process is done
@@ -555,6 +540,44 @@ install_with_progress() {
     log_success "Ready to use Speedflow with Claude Code! 🎯"
 }
 
+# Check for existing installation and handle user choice
+handle_existing_installation() {
+    if [ -d "$SPEEDFLOW_DIR" ]; then
+        echo
+        log_warning "Existing Speedflow installation found in .claude/"
+        echo
+        echo "Choose an option:"
+        echo "  1) Backup current installation and install fresh"
+        echo "  2) Remove current installation and install fresh"
+        echo "  3) Exit without changes"
+        echo
+        read -p "Enter your choice [1-3]: " -r choice
+
+        case $choice in
+            1)
+                local backup_name=".claude.backup.$(date +%Y%m%d_%H%M%S)"
+                log_info "Backing up existing installation to $backup_name"
+                mv "$SPEEDFLOW_DIR" "$backup_name"
+                log_success "Backup created: $backup_name"
+                ;;
+            2)
+                log_info "Removing existing installation..."
+                rm -rf "$SPEEDFLOW_DIR"
+                log_success "Existing installation removed"
+                ;;
+            3)
+                log_info "Installation cancelled by user"
+                exit 0
+                ;;
+            *)
+                log_error "Invalid choice. Installation cancelled."
+                exit 1
+                ;;
+        esac
+        echo
+    fi
+}
+
 # Ask user about auto-update
 configure_auto_update() {
     if [ -z "$AUTO_UPDATE" ] && [ "$SILENT_UPDATE" != "true" ]; then
@@ -585,6 +608,9 @@ main() {
     fi
 
     show_welcome
+
+    # Check for existing installation
+    handle_existing_installation
 
     # Configure auto-update preference
     configure_auto_update
