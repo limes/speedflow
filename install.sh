@@ -292,7 +292,7 @@ parse_args() {
                 echo "Examples:"
                 echo "  bash <(curl -fsSL .../install.sh)                   # Normal installation"
                 echo "  bash <(curl -fsSL .../install.sh) --debug          # Installation with debug logs"
-                echo "  bash <(curl -fsSL .../install.sh) --version 0.1.0  # Install specific version"
+                echo "  bash <(curl -fsSL .../install.sh) --version 1.0.1  # Install specific version"
                 echo "  bash <(curl -fsSL .../install.sh) --check-update   # Check for updates only"
                 echo
                 echo "Support:"
@@ -311,7 +311,7 @@ parse_args() {
 # Verify GitLab SSH access
 verify_gitlab_access() {
     log_info "Verifying GitLab SSH access..."
-    
+
     # Test SSH connection to GitLab
     if ssh -T git@gitlab.speednet.pl -o ConnectTimeout=10 -o StrictHostKeyChecking=no 2>&1 | grep -q "Welcome"; then
         log_success "SSH access to GitLab verified ✅"
@@ -367,7 +367,7 @@ install_claude_code() {
 # Check system requirements
 check_requirements() {
     log_info "Checking system requirements..."
-    
+
     # Check OS
     if [[ "$OSTYPE" != "linux-gnu"* ]] && [[ "$OSTYPE" != "darwin"* ]]; then
         if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "$WINDIR" ]]; then
@@ -385,7 +385,7 @@ check_requirements() {
         fi
         exit 1
     fi
-    
+
     # Check required commands
     local missing_commands=()
 
@@ -403,13 +403,13 @@ check_requirements() {
     else
         log_success "Claude Code CLI found"
     fi
-    
+
     if [ ${#missing_commands[@]} -gt 0 ]; then
         log_error "Missing required commands: ${missing_commands[*]}"
         echo "Please install missing commands and try again."
         exit 1
     fi
-    
+
     log_success "System requirements met"
 }
 
@@ -482,11 +482,11 @@ ensure_gitignore_safety() {
 # Install Speedflow locally
 install_speedflow() {
     log_info "Installing Speedflow in current directory: $(pwd)"
-    
+
     # Create temp directory
     mkdir -p "$TEMP_DIR"
     cd "$TEMP_DIR"
-    
+
     # Clone repository using SSH (quietly)
     log_info "Downloading Speedflow from GitLab..."
     if [ -n "$FORCE_VERSION" ]; then
@@ -503,42 +503,65 @@ install_speedflow() {
             exit 1
         fi
     fi
-    
+
     # Return to original directory
     cd - >/dev/null
-    
+
     # Copy entire .claude structure from repo (quietly)
     log_info "Setting up .claude directory structure..."
     if [ -d "$TEMP_DIR/core" ]; then
-        # Copy everything except .git and README.md (keep install.sh for local updates)
-        rsync -a --exclude='.git' "$TEMP_DIR/core/" "$SPEEDFLOW_DIR/" > /dev/null 2>&1
+        # Create target directory if it doesn't exist
+        mkdir -p "$SPEEDFLOW_DIR"
+
+        # Copy everything except .git and install.sh
+        # Using cp instead of rsync for better compatibility
+        for item in "$TEMP_DIR/core"/*; do
+            basename=$(basename "$item")
+            if [ "$basename" != ".git" ] && [ "$basename" != "install.sh" ] && [ "$basename" != "README.md" ]; then
+                cp -r "$item" "$SPEEDFLOW_DIR/"
+            fi
+        done
+
+        # Also copy hidden files (if any, excluding .git)
+        for item in "$TEMP_DIR/core"/.*; do
+            basename=$(basename "$item")
+            if [ "$basename" != "." ] && [ "$basename" != ".." ] && [ "$basename" != ".git" ]; then
+                cp -r "$item" "$SPEEDFLOW_DIR/" 2>/dev/null || true
+            fi
+        done
+
         log_success "Speedflow structure installed"
     else
         log_error "Repository structure not found"
         exit 1
     fi
-    
+
     # No need to keep repo - updates can re-run installer
-    
+
     # Create configuration files from templates
     log_info "Creating configuration files..."
 
     # Copy and configure Speedflow config
     if [ -f "$TEMP_DIR/core/templates/config.json.template" ]; then
         cp "$TEMP_DIR/core/templates/config.json.template" "$SPEEDFLOW_DIR/config.json"
-        sed -i '' "s/{{VERSION}}/$SPEEDFLOW_VERSION/g" "$SPEEDFLOW_DIR/config.json" 2>/dev/null || \
-        sed -i "s/{{VERSION}}/$SPEEDFLOW_VERSION/g" "$SPEEDFLOW_DIR/config.json"
-        sed -i '' "s/{{AUTO_UPDATE}}/${AUTO_UPDATE:-false}/g" "$SPEEDFLOW_DIR/config.json" 2>/dev/null || \
-        sed -i "s/{{AUTO_UPDATE}}/${AUTO_UPDATE:-false}/g" "$SPEEDFLOW_DIR/config.json"
-        sed -i '' "s/{{INSTALLED_AT}}/$(date -u +%Y-%m-%dT%H:%M:%SZ)/g" "$SPEEDFLOW_DIR/config.json" 2>/dev/null || \
-        sed -i "s/{{INSTALLED_AT}}/$(date -u +%Y-%m-%dT%H:%M:%SZ)/g" "$SPEEDFLOW_DIR/config.json"
+
+        # Use portable sed replacement
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "s/{{VERSION}}/$SPEEDFLOW_VERSION/g" "$SPEEDFLOW_DIR/config.json"
+            sed -i '' "s/{{AUTO_UPDATE}}/${AUTO_UPDATE:-false}/g" "$SPEEDFLOW_DIR/config.json"
+            sed -i '' "s/{{INSTALLED_AT}}/$(date -u +%Y-%m-%dT%H:%M:%SZ)/g" "$SPEEDFLOW_DIR/config.json"
+        else
+            sed -i "s/{{VERSION}}/$SPEEDFLOW_VERSION/g" "$SPEEDFLOW_DIR/config.json"
+            sed -i "s/{{AUTO_UPDATE}}/${AUTO_UPDATE:-false}/g" "$SPEEDFLOW_DIR/config.json"
+            sed -i "s/{{INSTALLED_AT}}/$(date -u +%Y-%m-%dT%H:%M:%SZ)/g" "$SPEEDFLOW_DIR/config.json"
+        fi
     fi
 
     # Copy Claude Code settings
     if [ -f "$TEMP_DIR/core/templates/settings.local.json.template" ]; then
         cp "$TEMP_DIR/core/templates/settings.local.json.template" "$SPEEDFLOW_DIR/settings.local.json"
     fi
-    
+
     log_success "Configuration files created"
 }
 
@@ -602,9 +625,19 @@ prompt_launch_claude() {
 # Verify installation
 verify_installation() {
     log_info "Verifying installation..."
-    
+
     if [ -d "$SPEEDFLOW_DIR/agents" ] && [ -f "$SPEEDFLOW_DIR/settings.local.json" ]; then
         log_success "Speedflow installed successfully! 🎉"
+        echo
+        echo "📋 Next steps:"
+        echo "   1. Start Claude Code CLI: claude"
+        echo "   2. Use Speedflow commands: /speedflow-review-pr"
+        echo "   3. Access Speedflow agents automatically"
+        echo
+        echo "📁 Files installed in .claude/"
+        echo "   • Agents: $(ls -1 "$SPEEDFLOW_DIR/agents" | wc -l | tr -d ' ') AI agents"
+        echo "   • Context: Global company standards"
+        echo "   • Commands: Speedflow slash commands"
     else
         log_error "Installation verification failed"
         exit 1
@@ -700,13 +733,17 @@ install_with_progress() {
 
     # Step 1: Requirements
     log_debug "Step 1: Checking system requirements"
-    show_progress $((++current)) $steps "Checking system requirements"
-    check_requirements > /dev/null 2>&1 &
-    show_spinner $! "Checking system requirements"
+    printf "\r${BLUE}⏳${NC} Checking system requirements...\n"
+    if check_requirements > /dev/null 2>&1; then
+        printf "\r${GREEN}✅${NC} Checking system requirements - Complete!\n"
+    else
+        printf "\r${RED}❌${NC} Checking system requirements - Failed!\n"
+        exit 1
+    fi
 
     # Step 2: GitLab access
     log_debug "Step 2: Verifying GitLab SSH access"
-    show_progress $((++current)) $steps "Verifying GitLab access"
+    printf "\r${BLUE}⏳${NC} Verifying GitLab access...\n"
     if ! verify_gitlab_access > /dev/null 2>&1; then
         log_debug "GitLab access verification failed"
         printf "\r${RED}❌${NC} Verifying GitLab access - Failed!\n"
@@ -731,7 +768,7 @@ install_with_progress() {
 
     # Step 3: Git safety
     log_debug "Step 3: Ensuring Git safety requirements"
-    show_progress $((++current)) $steps "Ensuring Git safety"
+    printf "\r${BLUE}⏳${NC} Ensuring Git safety...\n"
 
     # Check if we're in a Git repository (direct check to avoid subshell issues)
     log_debug "Performing direct Git repository check"
@@ -777,18 +814,29 @@ install_with_progress() {
 
     # Step 4: Installation
     log_debug "Step 4: Installing Speedflow components"
-    show_progress $((++current)) $steps "Installing Speedflow"
-    install_speedflow > /dev/null 2>&1 &
-    show_spinner $! "Installing Speedflow components"
+    printf "\r${BLUE}⏳${NC} Installing Speedflow components...\n"
+
+    # Run install_speedflow directly without background process
+    if install_speedflow > /tmp/speedflow-install-log-$$.txt 2>&1; then
+        printf "\r${GREEN}✅${NC} Installing Speedflow components - Complete!\n"
+    else
+        printf "\r${RED}❌${NC} Installing Speedflow components - Failed!\n"
+        log_error "Installation failed. Check /tmp/speedflow-install-log-$$.txt for details"
+        exit 1
+    fi
 
     # Step 5: Verification
     log_debug "Step 5: Verifying installation"
-    show_progress $((++current)) $steps "Verifying installation"
-    verify_installation > /dev/null 2>&1 &
-    show_spinner $! "Verifying installation"
+    printf "\r${BLUE}⏳${NC} Verifying installation...\n"
 
-    # Complete
-    show_progress $steps $steps "Installation complete"
+    # Run verify_installation directly
+    if verify_installation > /dev/null 2>&1; then
+        printf "\r${GREEN}✅${NC} Verifying installation - Complete!\n"
+    else
+        printf "\r${RED}❌${NC} Verifying installation - Failed!\n"
+        exit 1
+    fi
+
     echo
     log_success "Ready to use Speedflow with Claude Code! 🎯"
 
