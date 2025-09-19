@@ -4,11 +4,15 @@
 
 set -e
 
+# Global debug flag
+DEBUG_MODE=false
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Configuration
@@ -85,7 +89,7 @@ show_progress() {
     tput rc
 }
 
-# Animated spinner
+# Animated spinner with exit code checking
 show_spinner() {
     local pid=$1
     local message=$2
@@ -101,8 +105,18 @@ show_spinner() {
         ((i++))
     done
 
+    # Wait for process and check exit code
+    wait $pid
+    local exit_code=$?
+
     tput cnorm # Show cursor
-    printf "\r${GREEN}✅${NC} %s - Complete!\n" "$message"
+
+    if [ $exit_code -ne 0 ]; then
+        printf "\r${RED}❌${NC} %s - Failed!\n" "$message"
+        exit $exit_code
+    else
+        printf "\r${GREEN}✅${NC} %s - Complete!\n" "$message"
+    fi
 }
 
 # Functions
@@ -120,6 +134,21 @@ log_warning() {
 
 log_error() {
     echo -e "${RED}❌ $1${NC}"
+}
+
+log_debug() {
+    if [ "$DEBUG_MODE" = true ]; then
+        echo -e "${PURPLE}🐛 DEBUG: $1${NC}" >&2
+    fi
+}
+
+debug_exec() {
+    if [ "$DEBUG_MODE" = true ]; then
+        echo -e "${PURPLE}🐛 EXEC: $*${NC}" >&2
+        "$@"
+    else
+        "$@"
+    fi
 }
 
 # Check if command exists
@@ -214,6 +243,11 @@ check_for_updates() {
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --debug)
+                DEBUG_MODE=true
+                log_debug "Debug mode enabled"
+                shift
+                ;;
             --check-update)
                 check_for_updates
                 exit 0
@@ -247,6 +281,7 @@ parse_args() {
                 echo "Usage: bash <(curl -fsSL .../install.sh) [OPTIONS]"
                 echo
                 echo "Command line options:"
+                echo "  --debug                Enable debug mode (verbose logging)"
                 echo "  --check-update         Check for available updates"
                 echo "  --auto-update          Enable auto-update (default: ask user)"
                 echo "  --no-auto-update       Disable auto-update"
@@ -256,7 +291,8 @@ parse_args() {
                 echo
                 echo "Examples:"
                 echo "  bash <(curl -fsSL .../install.sh)                   # Normal installation"
-                echo "  bash <(curl -fsSL .../install.sh) --version 1.0.1  # Install specific version"
+                echo "  bash <(curl -fsSL .../install.sh) --debug          # Installation with debug logs"
+                echo "  bash <(curl -fsSL .../install.sh) --version 0.1.0  # Install specific version"
                 echo "  bash <(curl -fsSL .../install.sh) --check-update   # Check for updates only"
                 echo
                 echo "Support:"
@@ -379,12 +415,15 @@ check_requirements() {
 
 # Ensure .claude is in committed .gitignore
 ensure_gitignore_safety() {
+    log_debug "Starting ensure_gitignore_safety function"
     log_info "Checking Git safety requirements..."
 
-    # Check if we're in a Git repository
+    log_debug "Checking if current directory is a Git repository"
+    # Check if we're in a Git repository (this check is now done inline in install_with_progress)
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        log_debug "Git repository check failed"
         echo
-        log_error "❌ SECURITY REQUIREMENT: Must be in Git repository"
+        log_error "SECURITY REQUIREMENT: Must be in Git repository"
         echo
         echo "🔒 Speedflow requires Git version control for security:"
         echo "   • Prevents accidental commit of .claude/ files"
@@ -396,13 +435,20 @@ ensure_gitignore_safety() {
         echo "   git add ."
         echo "   git commit -m 'Initial commit'"
         echo
+        echo "   Or clone your existing client repository:"
+        echo "   git clone <your-client-repo-url> ."
+        echo
         echo "   Then re-run Speedflow installer"
         echo
         exit 1
     fi
 
+    log_debug "Git repository check passed"
+
     # Add .claude to .gitignore if not present
+    log_debug "Checking if .claude/ is in .gitignore"
     if [ ! -f ".gitignore" ] || ! grep -q "^\.claude/" .gitignore; then
+        log_debug "Adding .claude/ to .gitignore"
         echo ".claude/" >> .gitignore
         log_success "Added .claude/ to .gitignore"
     else
@@ -410,10 +456,13 @@ ensure_gitignore_safety() {
     fi
 
     # ALWAYS verify .gitignore is committed (regardless if added now or existed before)
+    log_debug "Checking if .gitignore is committed to Git"
     gitignore_status=$(git status --porcelain .gitignore 2>/dev/null)
+    log_debug "Git status for .gitignore: '$gitignore_status'"
     if [ -n "$gitignore_status" ]; then
+        log_debug ".gitignore is not committed, showing error message"
         echo
-        log_error "❌ SECURITY REQUIREMENT: .gitignore must be committed"
+        log_error "SECURITY REQUIREMENT: .gitignore must be committed"
         echo
         echo "🔒 This prevents accidentally committing Speedflow files to client repo."
         echo
@@ -461,8 +510,8 @@ install_speedflow() {
     # Copy entire .claude structure from repo (quietly)
     log_info "Setting up .claude directory structure..."
     if [ -d "$TEMP_DIR/core" ]; then
-        # Copy everything except .git and install.sh
-        rsync -a --exclude='.git' --exclude='install.sh' --exclude='README.md' "$TEMP_DIR/core/" "$SPEEDFLOW_DIR/" > /dev/null 2>&1
+        # Copy everything except .git and README.md (keep install.sh for local updates)
+        rsync -a --exclude='.git' "$TEMP_DIR/core/" "$SPEEDFLOW_DIR/" > /dev/null 2>&1
         log_success "Speedflow structure installed"
     else
         log_error "Repository structure not found"
@@ -500,22 +549,62 @@ cleanup() {
     fi
 }
 
+# Prompt user to launch Claude Code CLI after successful installation
+prompt_launch_claude() {
+    # Skip prompt in silent mode (auto-updates)
+    if [ "$SILENT_UPDATE" = "true" ]; then
+        log_debug "Skipping Claude launch prompt in silent mode"
+        return 0
+    fi
+
+    log_debug "Prompting user to launch Claude Code CLI"
+    echo
+    echo -e "${YELLOW}🚀 Launch Claude Code CLI now?${NC}"
+    echo "• Claude Code is ready with Speedflow enhancements"
+    echo "• All agents and commands are immediately available"
+    echo "• You'll need to approve directory trust (choose 'Yes, proceed')"
+    echo
+
+    while true; do
+        read -p "Start Claude Code CLI? [Y/n]: " -r
+        case $REPLY in
+            [Yy]* | "")
+                log_debug "User chose to launch Claude Code CLI"
+                echo
+                log_info "Launching Claude Code CLI..."
+                echo
+                # Launch Claude and exit installer
+                if command_exists "claude"; then
+                    echo "Starting Claude Code CLI..."
+                    echo "→ When prompted, choose 'Yes, proceed' to trust this directory"
+                    echo
+                    exec claude
+                else
+                    log_error "Claude Code CLI not found after installation"
+                    echo "Please run: claude"
+                fi
+                break
+                ;;
+            [Nn]*)
+                log_debug "User chose not to launch Claude Code CLI"
+                echo
+                log_info "Claude Code CLI ready when you need it!"
+                echo "To start later: claude"
+                break
+                ;;
+            *)
+                echo "Please answer yes or no."
+                ;;
+        esac
+    done
+}
+
 # Verify installation
 verify_installation() {
     log_info "Verifying installation..."
     
     if [ -d "$SPEEDFLOW_DIR/agents" ] && [ -f "$SPEEDFLOW_DIR/settings.local.json" ]; then
         log_success "Speedflow installed successfully! 🎉"
-        echo
-        echo "📋 Next steps:"
-        echo "   1. Start Claude Code CLI: claude"
-        echo "   2. Use Speedflow commands: /speedflow-review-pr"
-        echo "   3. Access Speedflow agents automatically"
-        echo
-        echo "📁 Files installed in .claude/"
-        echo "   • Agents: $(ls -1 "$SPEEDFLOW_DIR/agents" | wc -l | tr -d ' ') AI agents"
-        echo "   • Context: Global company standards"
-        echo "   • Commands: Speedflow slash commands"
     else
         log_error "Installation verification failed"
         exit 1
@@ -533,6 +622,7 @@ show_welcome() {
     echo "╚════██║██╔═══╝ ██╔══╝  ██╔══╝  ██║  ██║██╔══╝  ██║     ██║   ██║██║███╗██║"
     echo "███████║██║     ███████╗███████╗██████╔╝██║     ███████╗╚██████╔╝╚███╔███╔╝"
     echo "╚══════╝╚═╝     ╚══════╝╚══════╝╚═════╝ ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝ "
+    echo -e "${BLUE}by Speednet${NC}"
     echo -e "${YELLOW}v${SPEEDFLOW_VERSION}${NC}"
     echo -e "${NC}"
     echo
@@ -604,30 +694,95 @@ show_welcome() {
 
 # Enhanced installation with progress
 install_with_progress() {
+    log_debug "Starting installation with progress tracking"
     local steps=5
     local current=0
 
     # Step 1: Requirements
+    log_debug "Step 1: Checking system requirements"
     show_progress $((++current)) $steps "Checking system requirements"
     check_requirements > /dev/null 2>&1 &
     show_spinner $! "Checking system requirements"
 
     # Step 2: GitLab access
+    log_debug "Step 2: Verifying GitLab SSH access"
     show_progress $((++current)) $steps "Verifying GitLab access"
-    verify_gitlab_access > /dev/null 2>&1 &
-    show_spinner $! "Verifying GitLab access"
+    if ! verify_gitlab_access > /dev/null 2>&1; then
+        log_debug "GitLab access verification failed"
+        printf "\r${RED}❌${NC} Verifying GitLab access - Failed!\n"
+        echo
+        echo
+        log_error "❌ SSH access to GitLab failed"
+        echo
+        echo "🔑 SSH key setup required:"
+        echo "   1. Generate SSH key: ssh-keygen -t ed25519"
+        echo "   2. Add key to GitLab: ${GITLAB_URL}/-/profile/keys"
+        echo "   3. Re-run installer"
+        echo
+        echo "   📞 Need help? Contact:"
+        echo "   • Slack: #speedflow-support"
+        echo "   • Email: admin@speednet.pl"
+        echo
+        exit 1
+    else
+        log_debug "GitLab access verification passed"
+        printf "\r${GREEN}✅${NC} Verifying GitLab access - Complete!\n"
+    fi
 
     # Step 3: Git safety
+    log_debug "Step 3: Ensuring Git safety requirements"
     show_progress $((++current)) $steps "Ensuring Git safety"
-    ensure_gitignore_safety > /dev/null 2>&1 &
-    show_spinner $! "Ensuring Git safety"
+
+    # Check if we're in a Git repository (direct check to avoid subshell issues)
+    log_debug "Performing direct Git repository check"
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        log_debug "Direct Git repository check failed"
+        printf "\r${RED}❌${NC} Ensuring Git safety - Failed!\n"
+        echo
+        echo
+        log_error "SECURITY REQUIREMENT: Must be in Git repository"
+        echo
+        echo "🔒 Speedflow requires Git version control for security:"
+        echo "   • Prevents accidental commit of .claude/ files"
+        echo "   • Ensures .gitignore protection is committed"
+        echo "   • Maintains clean client repositories"
+        echo
+        echo "📋 Initialize Git repository first:"
+        echo "   git init"
+        echo "   git add ."
+        echo "   git commit -m 'Initial commit'"
+        echo
+        echo "   Or clone your existing client repository:"
+        echo "   git clone <your-client-repo-url> ."
+        echo
+        echo "   Then re-run Speedflow installer"
+        echo
+        exit 1
+    fi
+
+    log_debug "Direct Git repository check passed"
+
+    # Run the rest of gitignore safety checks
+    log_debug "Running detailed Git safety checks via ensure_gitignore_safety"
+    if ! ensure_gitignore_safety; then
+        log_debug "ensure_gitignore_safety function failed"
+        printf "\r${RED}❌${NC} Ensuring Git safety - Failed!\n"
+        echo
+        echo "Failed to configure .gitignore safety. Check permissions."
+        exit 1
+    else
+        log_debug "Git safety checks completed successfully"
+        printf "\r${GREEN}✅${NC} Ensuring Git safety - Complete!\n"
+    fi
 
     # Step 4: Installation
+    log_debug "Step 4: Installing Speedflow components"
     show_progress $((++current)) $steps "Installing Speedflow"
     install_speedflow > /dev/null 2>&1 &
     show_spinner $! "Installing Speedflow components"
 
     # Step 5: Verification
+    log_debug "Step 5: Verifying installation"
     show_progress $((++current)) $steps "Verifying installation"
     verify_installation > /dev/null 2>&1 &
     show_spinner $! "Verifying installation"
@@ -636,6 +791,9 @@ install_with_progress() {
     show_progress $steps $steps "Installation complete"
     echo
     log_success "Ready to use Speedflow with Claude Code! 🎯"
+
+    # Prompt to launch Claude Code CLI
+    prompt_launch_claude
 }
 
 # Check for existing installation and handle user choice
@@ -696,30 +854,41 @@ configure_auto_update() {
 
 # Main installation flow
 main() {
+    log_debug "Starting Speedflow installer (main function)"
+    log_debug "Command line arguments: $*"
+
     # Parse command line arguments first
+    log_debug "Parsing command line arguments"
     parse_args "$@"
 
     # Check for updates if requested
     if [ "${1:-}" = "--check-update" ]; then
+        log_debug "Update check requested, running check_for_updates"
         check_for_updates
         exit 0
     fi
 
+    log_debug "Showing welcome screen"
     show_welcome
 
     # Check for existing installation
+    log_debug "Checking for existing installation"
     handle_existing_installation
 
     # Configure auto-update preference
+    log_debug "Configuring auto-update preferences"
     configure_auto_update
 
     # Trap cleanup
     trap cleanup EXIT
 
     # Check if terminal supports advanced features
+    log_debug "Checking terminal capabilities for progress display"
     if [ "$TERM" != "dumb" ] && [ -t 1 ] && [ "$SILENT_UPDATE" != "true" ]; then
+        log_debug "Terminal supports advanced features, using progress installation"
         install_with_progress
     else
+        log_debug "Using fallback simple installation"
         # Fallback to simple installation
         check_requirements
         verify_gitlab_access
@@ -727,6 +896,9 @@ main() {
         install_speedflow
         verify_installation
         log_success "Ready to use Speedflow with Claude Code! 🎯"
+
+        # Prompt to launch Claude Code CLI
+        prompt_launch_claude
     fi
 }
 
